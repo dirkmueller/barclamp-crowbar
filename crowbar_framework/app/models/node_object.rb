@@ -315,7 +315,10 @@ class NodeObject < ChefObject
 
   def description=(value)
     set_display "description", value
-    @role.description = chef_description
+
+    @role.with_save do |n|
+      n.description = chef_description
+    end
   end
 
   def status
@@ -381,24 +384,20 @@ class NodeObject < ChefObject
     return if @node.nil?
     return if @role.nil?
     return if self.allocated?
-    self.allocated = true
-    save
+    Rails.logger.info("Allocating node #{@node.name}")
+    @role.with_save do |n|
+      n.default_attributes["crowbar"]["allocated"] = true
+    end
   end
 
   def allocate
     allocate!
   end
 
-  def allocated=(value)
-    return false if @role.nil?
-    Rails.logger.info("Setting allocate state for #{@node.name} to #{value}")
-    self.crowbar["crowbar"]["allocated"] = value
-    @role.save
-    value
-  end
-
   def allocated?
-    (@node.nil? or @role.nil?) ? false : self.crowbar["crowbar"]["allocated"]
+    return false if (@node.nil? or @role.nil?)
+    return false if self.crowbar["crowbar"].nil?
+    return !!@role.default_attributes["crowbar"]["allocated"]
   end
 
   def ipmi_enabled?
@@ -519,7 +518,8 @@ class NodeObject < ChefObject
   def delete_from_run_list(rolename)
     crowbar["run_list_map"] = {} if crowbar["run_list_map"].nil?
     crowbar["run_list_map"][rolename] = { "states" => [ "all" ], "priority" => -1001 } unless crowbar["run_list_map"].nil?
-    crowbar_run_list.run_list_items.delete "role[#{rolename}]"
+
+    @role.run_list.run_list_items.delete "role[#{rolename}]"
   end
 
   def rebuild_run_list
@@ -535,10 +535,10 @@ class NodeObject < ChefObject
     Rails.logger.debug("rebuilt run_list will be #{vals.inspect}")
 
     # Rebuild list
-    crowbar_run_list.run_list_items.clear
+    @role.run_list.run_list_items.clear
     vals.each do |item|
       next if item[1]["priority"] == -1001 # Skip deleted items
-      crowbar_run_list.run_list_items << "role[#{item[0]}]"
+      @role.run_list.run_list_items << "role[#{item[0]}]"
     end
   end
 
@@ -554,11 +554,6 @@ class NodeObject < ChefObject
 
   def crowbar
     @role.default_attributes
-  end
-
-  def crowbar=(value)
-    return nil if @role.nil?
-    @role.default_attributes = value
   end
 
   # This include a map walk

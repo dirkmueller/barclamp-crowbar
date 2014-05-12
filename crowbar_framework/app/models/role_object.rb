@@ -50,7 +50,7 @@ class RoleObject < ChefObject
     end
     full.map { |x| "#{x.barclamp}_#{x.inst}" }
   end
-  
+
   def self.find_roles_by_name(name)
     roles = []
     #TODO this call could be moved to fild_roles_by_search
@@ -168,16 +168,41 @@ class RoleObject < ChefObject
     @role = x
   end
 
-  def save
+  def increase_crowbar_revision!
     @role.override_attributes[barclamp] = {} if @role.override_attributes[barclamp].nil?
     if @role.override_attributes[barclamp]["crowbar-revision"].nil?
       @role.override_attributes[barclamp]["crowbar-revision"] = 0
     else
       @role.override_attributes[barclamp]["crowbar-revision"] = @role.override_attributes[barclamp]["crowbar-revision"] + 1
     end
-    Rails.logger.debug("Saving role: #{@role.name} - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
-    role_lock = FileLock.acquire "role:#{@role.name}"
+  end
+
+  def with_save()
+    Rails.logger.debug("Starting with_save - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
     begin
+      role_lock = FileLock.acquire "role:#{@role.name}"
+      write_role = RoleObject.find_role_by_name(@role.name)
+      if write_role
+        # overwrite our role with the newly re-read role to get the latest state
+        @role = write_role.role
+
+        increase_crowbar_revision!
+
+        yield(@role)
+
+        @role.save
+      end
+    ensure
+      FileLock.release role_lock
+    end
+    Rails.logger.debug("Done with_save - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
+  end
+
+  def save
+    begin
+      role_lock = FileLock.acquire "role:#{@role.name}"
+      increase_crowbar_revision!
+      Rails.logger.debug("Saving role: #{@role.name} - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
       old_role = RoleObject.find_role_by_name(@role.name)
       if old_role
         old_role.override_attributes[barclamp] ||= {}
