@@ -316,7 +316,7 @@ class NodeObject < ChefObject
   def description=(value)
     set_display "description", value
 
-    @role.with_save do |n|
+    @role.save do |n|
       n.description = chef_description
     end
   end
@@ -385,8 +385,8 @@ class NodeObject < ChefObject
     return if @role.nil?
     return if self.allocated?
     Rails.logger.info("Allocating node #{@node.name}")
-    @role.with_save do |n|
-      n.default_attributes["crowbar"]["allocated"] = true
+    @role.save do |r|
+      r.default_attributes["crowbar"]["allocated"] = true
     end
   end
 
@@ -573,29 +573,20 @@ class NodeObject < ChefObject
     @node['roles'].nil? ? nil : @node['roles'].sort
   end
 
-  def save
-    if @role.default_attributes["crowbar-revision"].nil?
-      @role.default_attributes["crowbar-revision"] = 0
-      Rails.logger.debug("Starting Node Revisions: #{@node.name} - unset")
-    else
-      Rails.logger.debug("Starting Node Revisions: #{@node.name} - #{@role.default_attributes["crowbar-revision"]}")
-      @role.default_attributes["crowbar-revision"] = @role.default_attributes["crowbar-revision"] + 1
-    end
-    Rails.logger.debug("Saving node: #{@node.name} - #{@role.default_attributes["crowbar-revision"]}")
-
-    # helper function to remove from node elements that were removed from the
-    # role attributes; this is something that
-    # Chef::Mixin::DeepMerge::deep_merge doesn't do
-    def _remove_elements_from_node(old, new, from_node)
-      old.each_key do |k|
-        if not new.has_key?(k)
-          from_node.delete(k) unless from_node[k].nil?
-        elsif old[k].is_a?(Hash) and new[k].is_a?(Hash) and from_node[k].is_a?(Hash)
-          _remove_elements_from_node(old[k], new[k], from_node[k])
-        end
+  # helper function to remove from node elements that were removed from the
+  # role attributes; this is something that
+  # Chef::Mixin::DeepMerge::deep_merge doesn't do
+  def _remove_elements_from_node(old, new, from_node)
+    old.each_key do |k|
+      if not new.has_key?(k)
+        from_node.delete(k) unless from_node[k].nil?
+      elsif old[k].is_a?(Hash) and new[k].is_a?(Hash) and from_node[k].is_a?(Hash)
+        _remove_elements_from_node(old[k], new[k], from_node[k])
       end
     end
+  end
 
+  def save
     _remove_elements_from_node(@attrs_last_saved, @role.default_attributes, @node.normal_attrs)
     Chef::Mixin::DeepMerge::deep_merge!(@role.default_attributes, @node.normal_attrs, {})
 

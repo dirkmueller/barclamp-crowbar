@@ -168,7 +168,7 @@ class RoleObject < ChefObject
     @role = x
   end
 
-  def increase_crowbar_revision!
+  def increment_crowbar_revision!
     @role.override_attributes[barclamp] = {} if @role.override_attributes[barclamp].nil?
     if @role.override_attributes[barclamp]["crowbar-revision"].nil?
       @role.override_attributes[barclamp]["crowbar-revision"] = 0
@@ -177,51 +177,36 @@ class RoleObject < ChefObject
     end
   end
 
-  def with_save()
-    Rails.logger.debug("Starting with_save - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
+  def save
+    Rails.logger.debug("Saving role: #{@role.name} - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
+
     begin
       role_lock = FileLock.acquire "role:#{@role.name}"
-      write_role = RoleObject.find_role_by_name(@role.name)
-      if write_role
-        # overwrite our role with the newly re-read role to get the latest state
-        @role = write_role.role
+      upstream_role = RoleObject.find_role_by_name(@role.name)
 
-        increase_crowbar_revision!
-
-        yield(@role)
-
+      if upstream_role
+        if block_given?
+          @role = upstream_role.role
+          yield(@role)
+        end
+        increment_crowbar_revision!
         @role.save
       end
     ensure
       FileLock.release role_lock
     end
-    Rails.logger.debug("Done with_save - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
-  end
 
-  def save
-    begin
-      role_lock = FileLock.acquire "role:#{@role.name}"
-      increase_crowbar_revision!
-      Rails.logger.debug("Saving role: #{@role.name} - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
-      old_role = RoleObject.find_role_by_name(@role.name)
-      if old_role
-        old_role.override_attributes[barclamp] ||= {}
-        old_rev = old_role.override_attributes[barclamp]["crowbar-revision"]
-        new_rev = @role.override_attributes[barclamp]["crowbar-revision"]
-        if old_rev && old_rev >= new_rev
-          Rails.logger.warn("WARNING: revision race for role #{@role.name} (previous revision #{old_rev})")
-        end
-      end
-      @role.save
-    ensure
-      FileLock.release role_lock
-    end
     Rails.logger.debug("Done saving role: #{@role.name} - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
   end
 
   def destroy
     Rails.logger.debug("Destroying role: #{@role.name} - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
-    @role.destroy
+    begin
+      role_lock = FileLock.acquire "role:#{@role.name}"
+      @role.destroy
+    ensure
+      FileLock.release role_lock
+    end
     Rails.logger.debug("Done removing role: #{@role.name} - #{@role.override_attributes[barclamp]["crowbar-revision"]}")
   end
 
