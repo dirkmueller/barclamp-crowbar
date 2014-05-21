@@ -315,7 +315,10 @@ class NodeObject < ChefObject
 
   def description=(value)
     set_display "description", value
-    @role.description = chef_description
+
+    @role.save do |n|
+      n.description = chef_description
+    end
   end
 
   def status
@@ -381,24 +384,20 @@ class NodeObject < ChefObject
     return if @node.nil?
     return if @role.nil?
     return if self.allocated?
-    self.allocated = true
-    save
+    Rails.logger.info("Allocating node #{@node.name}")
+    @role.save do |r|
+      r.default_attributes["crowbar"]["allocated"] = true
+    end
   end
 
   def allocate
     allocate!
   end
 
-  def allocated=(value)
-    return false if @role.nil?
-    Rails.logger.info("Setting allocate state for #{@node.name} to #{value}")
-    self.crowbar["crowbar"]["allocated"] = value
-    @role.save
-    value
-  end
-
   def allocated?
-    (@node.nil? or @role.nil?) ? false : self.crowbar["crowbar"]["allocated"]
+    return false if (@node.nil? or @role.nil?)
+    return false if self.crowbar["crowbar"].nil?
+    return !!@role.default_attributes["crowbar"]["allocated"]
   end
 
   def ipmi_enabled?
@@ -519,7 +518,8 @@ class NodeObject < ChefObject
   def delete_from_run_list(rolename)
     crowbar["run_list_map"] = {} if crowbar["run_list_map"].nil?
     crowbar["run_list_map"][rolename] = { "states" => [ "all" ], "priority" => -1001 } unless crowbar["run_list_map"].nil?
-    crowbar_run_list.run_list_items.delete "role[#{rolename}]"
+
+    @role.run_list.run_list_items.delete "role[#{rolename}]"
   end
 
   def rebuild_run_list
@@ -535,10 +535,10 @@ class NodeObject < ChefObject
     Rails.logger.debug("rebuilt run_list will be #{vals.inspect}")
 
     # Rebuild list
-    crowbar_run_list.run_list_items.clear
+    @role.run_list.run_list_items.clear
     vals.each do |item|
       next if item[1]["priority"] == -1001 # Skip deleted items
-      crowbar_run_list.run_list_items << "role[#{item[0]}]"
+      @role.run_list.run_list_items << "role[#{item[0]}]"
     end
   end
 
@@ -554,11 +554,6 @@ class NodeObject < ChefObject
 
   def crowbar
     @role.default_attributes
-  end
-
-  def crowbar=(value)
-    return nil if @role.nil?
-    @role.default_attributes = value
   end
 
   # This include a map walk
@@ -578,29 +573,20 @@ class NodeObject < ChefObject
     @node['roles'].nil? ? nil : @node['roles'].sort
   end
 
-  def save
-    if @role.default_attributes["crowbar-revision"].nil?
-      @role.default_attributes["crowbar-revision"] = 0
-      Rails.logger.debug("Starting Node Revisions: #{@node.name} - unset")
-    else
-      Rails.logger.debug("Starting Node Revisions: #{@node.name} - #{@role.default_attributes["crowbar-revision"]}")
-      @role.default_attributes["crowbar-revision"] = @role.default_attributes["crowbar-revision"] + 1
-    end
-    Rails.logger.debug("Saving node: #{@node.name} - #{@role.default_attributes["crowbar-revision"]}")
-
-    # helper function to remove from node elements that were removed from the
-    # role attributes; this is something that
-    # Chef::Mixin::DeepMerge::deep_merge doesn't do
-    def _remove_elements_from_node(old, new, from_node)
-      old.each_key do |k|
-        if not new.has_key?(k)
-          from_node.delete(k) unless from_node[k].nil?
-        elsif old[k].is_a?(Hash) and new[k].is_a?(Hash) and from_node[k].is_a?(Hash)
-          _remove_elements_from_node(old[k], new[k], from_node[k])
-        end
+  # helper function to remove from node elements that were removed from the
+  # role attributes; this is something that
+  # Chef::Mixin::DeepMerge::deep_merge doesn't do
+  def _remove_elements_from_node(old, new, from_node)
+    old.each_key do |k|
+      if not new.has_key?(k)
+        from_node.delete(k) unless from_node[k].nil?
+      elsif old[k].is_a?(Hash) and new[k].is_a?(Hash) and from_node[k].is_a?(Hash)
+        _remove_elements_from_node(old[k], new[k], from_node[k])
       end
     end
+  end
 
+  def save
     _remove_elements_from_node(@attrs_last_saved, @role.default_attributes, @node.normal_attrs)
     Chef::Mixin::DeepMerge::deep_merge!(@role.default_attributes, @node.normal_attrs, {})
 
